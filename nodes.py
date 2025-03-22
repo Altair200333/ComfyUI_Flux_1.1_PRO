@@ -7,6 +7,18 @@ import time
 from enum import Enum
 from .utils import *
 
+TOOLTIP_DEFINITIONS = {
+    "image": "A Base64-encoded string representing the image you wish to modify. Can contain alpha mask if desired.",
+    "prompt": "The description of the changes you want to make. This text guides the inpainting process, specifying features, styles, or modifications for the masked area.",
+    "steps": "Number of steps for the image generation process. (min: 15, max: 50, default: 50)",
+    "guidance": "Guidance strength for the image generation process. (min: 1.5, max: 100.0, default: 60)",
+    "safety_tolerance": "Tolerance level for input and output moderation. Between 0 (most strict) and 6 (least strict) (default: 2)",
+    "output_format": "Output format for the generated image. Can be 'jpeg' or 'png' (default: jpeg)",
+    "mask": "A Base64-encoded string representing a mask for the areas you want to modify in the image. The mask should be the same dimensions as the image and in black and white. Black areas (0%) indicate no modification, while white areas (100%) specify areas for inpainting. Optional if you provide an alpha mask in the original image.",
+    "seed": "Optional seed for reproducibility.",
+    "prompt_upsampling": "Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation. (default: false)",
+}
+
 
 class Status(Enum):
     PENDING = "Pending"
@@ -94,16 +106,14 @@ class FluxProInpaint:
             "required": {
                 "image": (
                     "IMAGE",
-                    {
-                        "tooltip": "A Base64-encoded string representing the image you wish to modify. Can contain alpha mask if desired."
-                    },
+                    {"tooltip": TOOLTIP_DEFINITIONS["image"]},
                 ),
                 "prompt": (
                     "STRING",
                     {
                         "default": "",
                         "multiline": True,
-                        "tooltip": "The description of the changes you want to make. This text guides the inpainting process, specifying features, styles, or modifications for the masked area.",
+                        "tooltip": TOOLTIP_DEFINITIONS["prompt"],
                     },
                 ),
                 "steps": (
@@ -112,7 +122,7 @@ class FluxProInpaint:
                         "default": 50,
                         "min": 15,
                         "max": 50,
-                        "tooltip": "Number of steps for the image generation process. (min: 15, max: 50, default: 50)",
+                        "tooltip": TOOLTIP_DEFINITIONS["steps"],
                     },
                 ),
                 "guidance": (
@@ -121,7 +131,7 @@ class FluxProInpaint:
                         "default": 60.0,
                         "min": 1.5,
                         "max": 100.0,
-                        "tooltip": "Guidance strength for the image generation process. (min: 1.5, max: 100, default: 60)",
+                        "tooltip": TOOLTIP_DEFINITIONS["guidance"],
                     },
                 ),
                 "safety_tolerance": (
@@ -130,33 +140,31 @@ class FluxProInpaint:
                         "default": 6,
                         "min": 0,
                         "max": 6,
-                        "tooltip": "Tolerance level for input and output moderation. Between 0 (most strict) and 6 (least strict) (default: 2)",
+                        "tooltip": TOOLTIP_DEFINITIONS["safety_tolerance"],
                     },
                 ),
                 "output_format": (
                     ["jpeg", "png"],
                     {
                         "default": "jpeg",
-                        "tooltip": "Output format for the generated image. Can be 'jpeg' or 'png' (default: jpeg)",
+                        "tooltip": TOOLTIP_DEFINITIONS["output_format"],
                     },
                 ),
             },
             "optional": {
                 "mask": (
                     "MASK",
-                    {
-                        "tooltip": "A Base64-encoded string representing a mask for the areas you want to modify in the image. The mask should be the same dimensions as the image and in black and white. Black areas (0%) indicate no modification, while white areas (100%) specify areas for inpainting. Optional if you provide an alpha mask in the original image."
-                    },
+                    {"tooltip": TOOLTIP_DEFINITIONS["mask"]},
                 ),
                 "seed": (
                     "INT",
-                    {"default": -1, "tooltip": "Optional seed for reproducibility."},
+                    {"default": -1, "tooltip": TOOLTIP_DEFINITIONS["seed"]},
                 ),
                 "prompt_upsampling": (
                     "BOOLEAN",
                     {
                         "default": False,
-                        "tooltip": "Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation. (default: false)",
+                        "tooltip": TOOLTIP_DEFINITIONS["prompt_upsampling"],
                     },
                 ),
             },
