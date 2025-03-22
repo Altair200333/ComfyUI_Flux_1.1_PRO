@@ -94,17 +94,73 @@ class FluxProInpaint:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "steps": ("INT", {"default": 50, "min": 15, "max": 50}),
-                "guidance": ("FLOAT", {"default": 60.0, "min": 1.5, "max": 100.0}),
-                "safety_tolerance": ("INT", {"default": 6, "min": 0, "max": 6}),
-                "output_format": (["jpeg", "png"], {"default": "jpeg"}),
+                "image": (
+                    "IMAGE",
+                    {
+                        "tooltip": "A Base64-encoded string representing the image you wish to modify. Can contain alpha mask if desired."
+                    },
+                ),
+                "prompt": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "tooltip": "The description of the changes you want to make. This text guides the inpainting process, specifying features, styles, or modifications for the masked area.",
+                    },
+                ),
+                "steps": (
+                    "INT",
+                    {
+                        "default": 50,
+                        "min": 15,
+                        "max": 50,
+                        "tooltip": "Number of steps for the image generation process. (min: 15, max: 50, default: 50)",
+                    },
+                ),
+                "guidance": (
+                    "FLOAT",
+                    {
+                        "default": 60.0,
+                        "min": 1.5,
+                        "max": 100.0,
+                        "tooltip": "Guidance strength for the image generation process. (min: 1.5, max: 100, default: 60)",
+                    },
+                ),
+                "safety_tolerance": (
+                    "INT",
+                    {
+                        "default": 6,
+                        "min": 0,
+                        "max": 6,
+                        "tooltip": "Tolerance level for input and output moderation. Between 0 (most strict) and 6 (least strict) (default: 2)",
+                    },
+                ),
+                "output_format": (
+                    ["jpeg", "png"],
+                    {
+                        "default": "jpeg",
+                        "tooltip": "Output format for the generated image. Can be 'jpeg' or 'png' (default: jpeg)",
+                    },
+                ),
             },
             "optional": {
-                "mask": ("MASK",),
-                "seed": ("INT", {"default": -1}),
-                "prompt_upsampling": ("BOOLEAN", {"default": False}),
+                "mask": (
+                    "MASK",
+                    {
+                        "tooltip": "A Base64-encoded string representing a mask for the areas you want to modify in the image. The mask should be the same dimensions as the image and in black and white. Black areas (0%) indicate no modification, while white areas (100%) specify areas for inpainting. Optional if you provide an alpha mask in the original image."
+                    },
+                ),
+                "seed": (
+                    "INT",
+                    {"default": -1, "tooltip": "Optional seed for reproducibility."},
+                ),
+                "prompt_upsampling": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": "Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation. (default: false)",
+                    },
+                ),
             },
         }
 
