@@ -39,8 +39,6 @@ After installation, you'll find a new node called "Flux Pro 1.0 Fill [Inpaint]" 
 - **mask** (optional): The mask specifying areas to inpaint (white=inpaint, black=keep)
 - **seed** (optional): Seed for reproducibility
 - **prompt_upsampling** (optional): Whether to upsample the prompt
-- **webhook_url** (optional): URL for webhook notifications
-- **webhook_secret** (optional): Secret for webhook signature verification
 
 ## API Information
 
