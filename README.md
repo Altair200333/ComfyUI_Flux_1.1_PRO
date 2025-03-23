@@ -1,4 +1,4 @@
-# Flux Pro Inpaint Node
+# Flux Pro Nodes for ComfyUI
 
 This plugin adds a new node to ComfyUI. The node uses the FLUX.1 Fill API to fill in parts of an image.
 
