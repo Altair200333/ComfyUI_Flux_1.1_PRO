@@ -6,13 +6,16 @@ import configparser
 import time
 from enum import Enum
 from .utils import *
+import random
+
+VERSION_ID = f"{random.randint(1,9)}.{random.randint(0,99)}"
 
 TOOLTIP_DEFINITIONS = {
     "image": "A Base64-encoded string representing the image you wish to modify. Can contain alpha mask if desired.",
     "prompt": "The description of the changes you want to make. This text guides the inpainting process, specifying features, styles, or modifications for the masked area.",
     "steps": "Number of steps for the image generation process. (min: 15, max: 50, default: 50)",
     "guidance": "Guidance strength for the image generation process. (min: 1.5, max: 100.0, default: 60)",
-    "safety_tolerance": "Tolerance level for input and output moderation. Between 0 (most strict) and 6 (least strict) (default: 2)",
+    "safety_tolerance": "Tolerance level for input and output moderation. Between 0 (most strict) and 6 (no moderation) (default: 6)",
     "output_format": "Output format for the generated image. Can be 'jpeg' or 'png' (default: jpeg)",
     "mask": "A Base64-encoded string representing a mask for the areas you want to modify in the image. The mask should be the same dimensions as the image and in black and white. Black areas (0%) indicate no modification, while white areas (100%) specify areas for inpainting. Optional if you provide an alpha mask in the original image.",
     "seed": "Optional seed for reproducibility.",
@@ -28,86 +31,147 @@ class Status(Enum):
 
 class ConfigLoader:
     def __init__(self):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(current_dir, "config.ini")
-
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(
-                f"Config file not found at {config_path}. Please ensure config.ini exists in the same directory as the script."
-            )
-
+        curr = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(curr, "config.ini")
+        if not os.path.exists(cfg_path):
+            raise FileNotFoundError(f"Config file not found at {cfg_path}")
         self.config = configparser.ConfigParser()
-        self.config.read(config_path)
+        self.config.read(cfg_path)
         self.set_api_key()
         self.set_base_url()
 
     def _get_required_config_value(self, section, option):
-        if not self.config.has_section(section):
-            raise KeyError(f"Section '{section}' not found in config file")
-        if not self.config.has_option(section, option):
-            raise KeyError(f"{option} not found in {section} section")
+        if not self.config.has_section(section) or not self.config.has_option(
+            section, option
+        ):
+            raise KeyError(f"{option} not found in {section}")
         value = self.config[section][option]
         if not value:
             raise KeyError(f"{option} cannot be empty")
         return value
 
     def set_api_key(self):
-        try:
-            api_key = self._get_required_config_value("API", "API_KEY")
-            os.environ["API_KEY"] = api_key
-        except KeyError as e:
-            print(f"[FLUX INPAINT] Error setting API_KEY: {str(e)}")
-            print(
-                "[FLUX INPAINT] Please ensure config.ini contains a valid API_KEY under the [API] section"
-            )
-            raise
+        os.environ["API_KEY"] = self._get_required_config_value("API", "API_KEY")
 
     def set_base_url(self):
+        os.environ["BASE_URL"] = self._get_required_config_value("API", "BASE_URL")
+
+
+class FluxApiClient:
+    def __init__(self, api_key, base_url="https://api.us1.bfl.ai"):
+        self.api_key = api_key
+        self.base_url = base_url
+
+    def _make_headers(self):
+        return {"Content-Type": "application/json", "X-Key": self.api_key}
+
+    def send_request(self, method, endpoint, payload=None, timeout=30):
+        url = f"{self.base_url}{endpoint}"
         try:
-            base_url = self._get_required_config_value("API", "BASE_URL")
-            os.environ["BASE_URL"] = base_url
-        except KeyError as e:
-            print(f"[FLUX INPAINT] Error setting BASE_URL: {str(e)}")
-            print(
-                "[FLUX INPAINT] Please ensure your config.ini contains a valid BASE_URL under the [API] section"
+            return requests.request(
+                method,
+                url,
+                json=payload,
+                headers=self._make_headers(),
+                timeout=timeout,
             )
-            raise
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Request error {method} {url}: {e}")
+
+    def submit_job(self, endpoint, payload):
+        resp = self.send_request("POST", endpoint, payload)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Job submission error {resp.status_code}: {resp.text}")
+        task_id = resp.json().get("id")
+        if not task_id:
+            raise RuntimeError(f"No task id in response: {resp.json()}")
+        return task_id
+
+    def poll_result(self, task_id, output_format="jpeg", max_attempts=15):
+        """
+        Poll the Flux API for the result of the submitted job.
+        Uses exponential backoff for attempts 1-4 (wait times: 1s, 2s, 4s, 8s)
+        and then cycles through wait times of 2s, 4s, and 8s for subsequent attempts.
+        """
+        for attempt in range(1, max_attempts + 1):
+            if attempt <= 4:
+                wait_time = 2 ** (attempt - 1)
+            else:
+                wait_time = 2 ** (((attempt - 5) % 3) + 1)
+
+            time.sleep(wait_time)
+            response = self.send_request("GET", f"/v1/get_result?id={task_id}")
+            if response.status_code != 200:
+                continue
+            data = response.json()
+            if data.get("status") != "Ready":
+                continue
+            sample_url = data.get("result", {}).get("sample")
+            if not sample_url:
+                raise RuntimeError(f"No sample URL for task {task_id}")
+            img_resp = requests.get(sample_url, timeout=30)
+            if img_resp.status_code != 200:
+                raise RuntimeError(f"Error fetching image: {img_resp.status_code}")
+            return Image.open(io.BytesIO(img_resp.content)).convert("RGB")
+        raise RuntimeError(f"Max attempts reached for task {task_id}")
+
+    def call_api_job(self, endpoint, payload, output_format="jpeg", max_attempts=15):
+        tid = self.submit_job(endpoint, payload)
+        return self.poll_result(tid, output_format, max_attempts)
+
+    def inpaint(
+        self,
+        image,
+        prompt,
+        steps,
+        guidance,
+        safety_tolerance,
+        output_format,
+        seed=-1,
+        mask=None,
+        prompt_upsampling=False,
+        max_attempts=15,
+    ):
+        if isinstance(prompt, list):
+            prompt = " ".join(map(str, prompt))
+        img_b64, img_size = tensor_to_base64(image, mode="RGB")
+        mask_b64 = mask_to_base64(mask[0], img_size) if mask is not None else None
+        payload = {
+            "image": img_b64,
+            "prompt": prompt,
+            "steps": steps,
+            "guidance": guidance,
+            "safety_tolerance": safety_tolerance,
+            "output_format": output_format,
+            "prompt_upsampling": prompt_upsampling,
+        }
+        if mask_b64:
+            payload["mask"] = mask_b64
+        if seed != -1:
+            payload["seed"] = seed
+        res_img = self.call_api_job(
+            "/v1/flux-pro-1.0-fill", payload, output_format, max_attempts
+        )
+        return pil_to_tensor(res_img)
 
 
 class FluxProInpaint:
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "STRING")
     FUNCTION = "process"
     CATEGORY = "BFL"
 
     def __init__(self):
-        try:
-            self.config_loader = ConfigLoader()
-            self.api_key = os.environ.get("API_KEY")
-            self.base_url = os.environ.get("BASE_URL", "https://api.us1.bfl.ai")
-            if not self.api_key:
-                raise ValueError(
-                    "API_KEY not found in environment variables after loading config"
-                )
-
-            print(f"[FLUX INPAINT] Initialized with BASE_URL: {self.base_url}")
-            print(
-                f"[FLUX INPAINT] API_KEY is set: {self.api_key[:5]}...{self.api_key[-5:]}"
-            )
-        except Exception as e:
-            print(f"[FLUX INPAINT] Initialization Error: {str(e)}")
-            print(
-                "[FLUX INPAINT] Please ensure config.ini is properly set up with API credentials"
-            )
-            raise
+        self.config_loader = ConfigLoader()
+        self.api_key = os.environ.get("API_KEY")
+        self.base_url = os.environ.get("BASE_URL", "https://api.us1.bfl.ai")
+        if not self.api_key:
+            raise ValueError("API_KEY not found")
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": (
-                    "IMAGE",
-                    {"tooltip": TOOLTIP_DEFINITIONS["image"]},
-                ),
+                "image": ("IMAGE", {"tooltip": TOOLTIP_DEFINITIONS["image"]}),
                 "prompt": (
                     "STRING",
                     {
@@ -144,7 +208,7 @@ class FluxProInpaint:
                     },
                 ),
                 "output_format": (
-                    ["jpeg", "png"],
+                    ("jpeg", "png"),
                     {
                         "default": "jpeg",
                         "tooltip": TOOLTIP_DEFINITIONS["output_format"],
@@ -152,10 +216,7 @@ class FluxProInpaint:
                 ),
             },
             "optional": {
-                "mask": (
-                    "MASK",
-                    {"tooltip": TOOLTIP_DEFINITIONS["mask"]},
-                ),
+                "mask": ("MASK", {"tooltip": TOOLTIP_DEFINITIONS["mask"]}),
                 "seed": (
                     "INT",
                     {"default": -1, "tooltip": TOOLTIP_DEFINITIONS["seed"]},
@@ -170,33 +231,6 @@ class FluxProInpaint:
             },
         }
 
-    def _build_payload(
-        self,
-        img_base64,
-        prompt,
-        steps,
-        guidance,
-        safety_tolerance,
-        output_format,
-        prompt_upsampling,
-        mask_base64=None,
-        seed=-1,
-    ):
-        payload = {
-            "image": img_base64,
-            "prompt": prompt,
-            "steps": steps,
-            "guidance": guidance,
-            "output_format": output_format,
-            "safety_tolerance": safety_tolerance,
-            "prompt_upsampling": prompt_upsampling,
-        }
-        if mask_base64:
-            payload["mask"] = mask_base64
-        if seed != -1:
-            payload["seed"] = seed
-        return payload
-
     def process(
         self,
         image,
@@ -209,162 +243,16 @@ class FluxProInpaint:
         mask=None,
         prompt_upsampling=False,
     ):
-        """
-        In ComfyUI, an IMAGE tensor is usually shape [B, H, W, C].
-        We'll handle only the first batch here (if multiple images are fed in, only the first will be inpainted).
-        """
-        preserve_alpha = image.shape[-1] == 4
-
-        if isinstance(prompt, list):
-            prompt = " ".join(str(p) for p in prompt)
-
-        print(f"[FLUX INPAINT] preserve_alpha set to: {preserve_alpha}")
-        try:
-            print(f"[FLUX INPAINT] Processing image with prompt: '{prompt}'")
-            pil_image = tensor_to_pil(image, mode="RGBA" if preserve_alpha else "RGB")
-            img_base64 = pil_to_base64(pil_image)
-            print("[FLUX INPAINT] Converted input image to base64.")
-
-            mask_base64 = None
-            if mask is not None:
-                mask_base64 = mask_to_base64(mask[0], pil_image.size)
-                print("[FLUX INPAINT] Processed mask to base64.")
-
-            url = f"{self.base_url}/v1/flux-pro-1.0-fill"
-            headers = {"Content-Type": "application/json", "X-Key": self.api_key}
-            payload = self._build_payload(
-                img_base64,
-                prompt,
-                steps,
-                guidance,
-                safety_tolerance,
-                output_format,
-                prompt_upsampling,
-                mask_base64,
-                seed,
-            )
-
-            print(f"[FLUX INPAINT] Sending request to: {url}")
-            try:
-                resp = requests.request(
-                    "POST", url, json=payload, headers=headers, timeout=30
-                )
-            except requests.exceptions.RequestException as e:
-                raise RuntimeError(
-                    f"[FLUX INPAINT] Network error during POST request: {e}"
-                )
-
-            print(f"[FLUX INPAINT] Response Status: {resp.status_code}")
-            if resp.status_code == 200:
-                resp_json = resp.json()
-                task_id = resp_json.get("id")
-                if not task_id:
-                    raise RuntimeError(
-                        f"[FLUX INPAINT] Error: No 'id' in server response. Full response: {resp_json}"
-                    )
-
-                print(f"[FLUX INPAINT] Task ID received: {task_id}")
-                return self.get_result(task_id, output_format, preserve_alpha)
-            else:
-                try:
-                    err_details = resp.json()
-                    print(f"[FLUX INPAINT] Server Error JSON: {err_details}")
-                except:
-                    print("[FLUX INPAINT] Error reading JSON from response:")
-                    print(resp.text)
-                raise RuntimeError(
-                    f"[FLUX INPAINT] Non-200 response ({resp.status_code}). See logs above for details."
-                )
-
-        except Exception as e:
-            print(f"[FLUX INPAINT] Unexpected Error: {e}")
-            import traceback
-
-            traceback.print_exc()
-            raise
-
-    def get_result(self, task_id, output_format, preserve_alpha=False, max_attempts=15):
-        attempt = 1
-        while attempt <= max_attempts:
-            wait_time = min((2**attempt + 1) * 0.5, 15)
-            print(
-                f"[FLUX INPAINT] Waiting {wait_time} seconds before polling attempt {attempt}…"
-            )
-            time.sleep(wait_time)
-
-            get_url = f"{self.base_url}/v1/get_result?id={task_id}"
-            headers = {"X-Key": self.api_key}
-
-            try:
-                resp = requests.request("GET", get_url, headers=headers, timeout=30)
-            except requests.exceptions.RequestException as e:
-                print(f"[FLUX INPAINT] Network error during GET request: {e}")
-                attempt += 1
-                continue
-
-            print(
-                f"[FLUX INPAINT] Poll attempt {attempt}, status code: {resp.status_code}"
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                status = data.get("status")
-                print(f"[FLUX INPAINT] Task status: {status}")
-
-                if status == Status.READY.value:
-                    sample_url = data.get("result", {}).get("sample")
-                    if not sample_url:
-                        raise RuntimeError(
-                            f"[FLUX INPAINT] No sample URL in 'result' for task {task_id}."
-                        )
-                    try:
-                        img_resp = requests.request("GET", sample_url, timeout=30)
-                        if img_resp.status_code != 200:
-                            raise RuntimeError(
-                                f"[FLUX INPAINT] Error fetching final image: {img_resp.status_code}"
-                            )
-                        pil_img = Image.open(io.BytesIO(img_resp.content))
-                        if preserve_alpha and output_format.lower() == "png":
-                            pil_img = pil_img.convert("RGBA")
-                        else:
-                            pil_img = pil_img.convert("RGB")
-                        final_tensor = pil_to_tensor(pil_img)
-                    except Exception as e:
-                        print(f"[FLUX INPAINT] Error processing final image: {e}")
-                        import traceback
-
-                        traceback.print_exc()
-                        raise RuntimeError(
-                            "[FLUX INPAINT] Error processing final image."
-                        )
-
-                    print(f"[FLUX INPAINT] Retrieved final image for task {task_id}")
-                    return (final_tensor,)
-
-                elif status == Status.PENDING.value:
-                    print("[FLUX INPAINT] Task still Pending; will retry.")
-                else:
-                    raise RuntimeError(f"[FLUX INPAINT] Unexpected status '{status}'.")
-            else:
-                print(f"[FLUX INPAINT] Non-200 while polling: {resp.status_code}")
-            attempt += 1
-        raise RuntimeError(
-            f"[FLUX INPAINT] Max attempts reached for task_id {task_id}. Aborting."
+        client = FluxApiClient(api_key=self.api_key, base_url=self.base_url)
+        res = client.inpaint(
+            image,
+            prompt,
+            steps,
+            guidance,
+            safety_tolerance,
+            output_format,
+            seed,
+            mask,
+            prompt_upsampling,
         )
-
-    def sanitize_response(self, data):
-        """
-        Optional helper if you want to log responses but remove big base64 data.
-        Not currently called, but you can use it if desired.
-        """
-        if isinstance(data, dict):
-            sanitized = {}
-            for k, v in data.items():
-                if isinstance(v, str) and len(v) > 100:
-                    sanitized[k] = "[BASE64 DATA REDACTED]"
-                else:
-                    sanitized[k] = self.sanitize_response(v)
-            return sanitized
-        elif isinstance(data, list):
-            return [self.sanitize_response(item) for item in data]
-        else:
-            return data
+        return (res, VERSION_ID)
