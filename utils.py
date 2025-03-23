@@ -51,3 +51,16 @@ def sanitize_response(data):
         return [sanitize_response(item) for item in data]
     else:
         return data
+
+
+def get_dimensions_from_ratio(aspect_ratio):
+    regular_dimensions = {
+        "1:1": (1024, 1024),
+        "4:3": (1408, 1024),
+        "3:4": (1024, 1408),
+        "16:9": (1408, 800),
+        "9:16": (800, 1408),
+        "21:9": (1408, 608),
+        "9:21": (608, 1408),
+    }
+    return regular_dimensions.get(aspect_ratio, (1024, 1024))

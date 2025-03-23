@@ -6,6 +6,7 @@ import configparser
 import time
 from enum import Enum
 from .utils import *
+from .constants import *
 import random
 
 VERSION_ID = f"{random.randint(1,9)}.{random.randint(0,99)}"
@@ -20,6 +21,10 @@ TOOLTIP_DEFINITIONS = {
     "mask": "A Base64-encoded string representing a mask for the areas you want to modify in the image. The mask should be the same dimensions as the image and in black and white. Black areas (0%) indicate no modification, while white areas (100%) specify areas for inpainting. Optional if you provide an alpha mask in the original image.",
     "seed": "Optional seed for reproducibility.",
     "prompt_upsampling": "Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation. (default: false)",
+    "model": "Select the generation model: 'pro', 'ultra', or 'ultra_raw'.",
+    "aspect_ratio": "Aspect ratio of the generated image, e.g., '16:9'.",
+    "image_prompt": "Base64 encoded image to remix (if any); leave empty for no image prompt.",
+    "image_prompt_strength": "Blend strength between the prompt and image prompt.",
 }
 
 
@@ -27,6 +32,12 @@ class Status(Enum):
     PENDING = "Pending"
     READY = "Ready"
     ERROR = "Error"
+
+
+class FluxModel(Enum):
+    PRO = "pro"
+    ULTRA = "ultra"
+    ULTRA_RAW = "ultra_raw"
 
 
 class ConfigLoader:
@@ -97,7 +108,7 @@ class FluxApiClient:
             raise RuntimeError(f"No task id in response: {sanitized_error}")
         return task_id
 
-    def poll_result(self, task_id, output_format="jpeg", max_attempts=15):
+    def poll_result(self, task_id, output_format="jpeg", max_attempts=MAX_ATTEMPTS):
         """
         Poll the Flux API for the result of the submitted job.
         Uses exponential backoff for attempts 1-4 (wait times: 1s, 2s, 4s, 8s)
@@ -114,7 +125,7 @@ class FluxApiClient:
             if response.status_code != 200:
                 continue
             data = response.json()
-            if data.get("status") != "Ready":
+            if data.get("status") != Status.READY.value:
                 continue
             sample_url = data.get("result", {}).get("sample")
             if not sample_url:
@@ -125,7 +136,9 @@ class FluxApiClient:
             return Image.open(io.BytesIO(img_resp.content)).convert("RGB")
         raise RuntimeError(f"Max attempts reached for task {task_id}")
 
-    def call_api_job(self, endpoint, payload, output_format="jpeg", max_attempts=15):
+    def call_api_job(
+        self, endpoint, payload, output_format="jpeg", max_attempts=MAX_ATTEMPTS
+    ):
         tid = self.submit_job(endpoint, payload)
         return self.poll_result(tid, output_format, max_attempts)
 
@@ -137,10 +150,10 @@ class FluxApiClient:
         guidance,
         safety_tolerance,
         output_format,
-        seed=-1,
+        seed=None,
         mask=None,
         prompt_upsampling=False,
-        max_attempts=15,
+        max_attempts=MAX_ATTEMPTS,
     ):
         if isinstance(prompt, list):
             prompt = " ".join(map(str, prompt))
@@ -157,10 +170,76 @@ class FluxApiClient:
         }
         if mask_b64:
             payload["mask"] = mask_b64
-        if seed != -1:
+        if seed is not None:
             payload["seed"] = seed
         res_img = self.call_api_job(
-            "/v1/flux-pro-1.0-fill", payload, output_format, max_attempts
+            endpoint="/v1/flux-pro-1.0-fill",
+            payload=payload,
+            output_format=output_format,
+            max_attempts=max_attempts,
+        )
+        return pil_to_tensor(res_img)
+
+    def flux_generate(
+        self,
+        model,
+        prompt,
+        image_prompt=None,
+        prompt_upsampling=False,
+        seed=None,
+        safety_tolerance=6,
+        output_format="png",
+        aspect_ratio="16:9",
+        image_prompt_strength=0.1,
+        max_attempts=MAX_ATTEMPTS,
+    ):
+        model_str = model.value if hasattr(model, "value") else model
+        if model_str == "pro":
+            width, height = get_dimensions_from_ratio(aspect_ratio)
+            payload = {
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                "prompt_upsampling": prompt_upsampling,
+                "safety_tolerance": safety_tolerance,
+                "output_format": output_format,
+            }
+
+            if image_prompt is not None:
+                img_b64, _ = tensor_to_base64(image_prompt, mode="RGB")
+                payload["image_prompt"] = img_b64
+
+            endpoint = "/v1/flux-pro-1.1"
+        elif model_str in ("ultra", "ultra_raw"):
+            is_raw = model_str == "ultra_raw"
+            payload = {
+                "prompt": prompt,
+                "prompt_upsampling": prompt_upsampling,
+                "aspect_ratio": aspect_ratio,
+                "safety_tolerance": safety_tolerance,
+                "output_format": output_format,
+                "raw": is_raw,
+            }
+
+            if image_prompt is not None:
+                img_b64, _ = tensor_to_base64(image_prompt, mode="RGB")
+                payload["image_prompt"] = img_b64
+                payload["image_prompt_strength"] = image_prompt_strength
+
+            endpoint = "/v1/flux-pro-1.1-ultra"
+        else:
+            raise ValueError(
+                'Unsupported model type: choose one of "pro", "ultra", "ultra_raw"'
+            )
+
+        if seed is not None:
+            payload["seed"] = seed
+
+        res_img = self.call_api_job(
+            endpoint=endpoint,
+            payload=payload,
+            output_format=output_format,
+            max_attempts=max_attempts,
         )
         return pil_to_tensor(res_img)
 
@@ -174,8 +253,6 @@ class FluxProInpaint:
         self.config_loader = ConfigLoader()
         self.api_key = os.environ.get("API_KEY")
         self.base_url = os.environ.get("BASE_URL", "https://api.us1.bfl.ai")
-        if not self.api_key:
-            raise ValueError("API_KEY not found")
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -254,15 +331,130 @@ class FluxProInpaint:
         prompt_upsampling=False,
     ):
         client = FluxApiClient(api_key=self.api_key, base_url=self.base_url)
+        seed_val = None if seed == -1 else seed
         res = client.inpaint(
-            image,
-            prompt,
-            steps,
-            guidance,
-            safety_tolerance,
-            output_format,
-            seed,
-            mask,
-            prompt_upsampling,
+            image=image,
+            prompt=prompt,
+            steps=steps,
+            guidance=guidance,
+            safety_tolerance=safety_tolerance,
+            output_format=output_format,
+            seed=seed_val,
+            mask=mask,
+            prompt_upsampling=prompt_upsampling,
+        )
+        return (res, VERSION_ID)
+
+
+class FluxGenerate:
+    RETURN_TYPES = ("IMAGE", "STRING")
+    FUNCTION = "process"
+    CATEGORY = "BFL"
+
+    def __init__(self):
+        self.config_loader = ConfigLoader()
+        self.api_key = os.environ.get("API_KEY")
+        self.base_url = os.environ.get("BASE_URL", "https://api.us1.bfl.ai")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "tooltip": TOOLTIP_DEFINITIONS["prompt"],
+                    },
+                ),
+                "model": (
+                    ("pro", "ultra", "ultra_raw"),
+                    {
+                        "default": "pro",
+                        "tooltip": TOOLTIP_DEFINITIONS["model"],
+                    },
+                ),
+                "safety_tolerance": (
+                    "INT",
+                    {
+                        "default": 6,
+                        "min": 0,
+                        "max": 6,
+                        "tooltip": TOOLTIP_DEFINITIONS["safety_tolerance"],
+                    },
+                ),
+                "output_format": (
+                    ("jpeg", "png"),
+                    {
+                        "default": "png",
+                        "tooltip": TOOLTIP_DEFINITIONS["output_format"],
+                    },
+                ),
+            },
+            "optional": {
+                "prompt_upsampling": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": TOOLTIP_DEFINITIONS["prompt_upsampling"],
+                    },
+                ),
+                "seed": (
+                    "INT",
+                    {
+                        "default": -1,
+                        "tooltip": TOOLTIP_DEFINITIONS["seed"],
+                    },
+                ),
+                "aspect_ratio": (
+                    ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "9:21"],
+                    {
+                        "default": "16:9",
+                        "tooltip": TOOLTIP_DEFINITIONS["aspect_ratio"],
+                    },
+                ),
+                "image_prompt": (
+                    "IMAGE",
+                    {
+                        "tooltip": TOOLTIP_DEFINITIONS["image_prompt"],
+                    },
+                ),
+                "image_prompt_strength": (
+                    "FLOAT",
+                    {
+                        "default": 0.1,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "tooltip": TOOLTIP_DEFINITIONS["image_prompt_strength"],
+                    },
+                ),
+            },
+        }
+
+    def process(
+        self,
+        prompt,
+        model,
+        safety_tolerance,
+        output_format,
+        prompt_upsampling=False,
+        seed=-1,
+        aspect_ratio="16:9",
+        image_prompt=None,
+        image_prompt_strength=0.1,
+    ):
+        client = FluxApiClient(api_key=self.api_key, base_url=self.base_url)
+        seed_val = None if seed == -1 else seed
+        res = client.flux_generate(
+            model=model,
+            prompt=prompt,
+            image_prompt=image_prompt,
+            prompt_upsampling=prompt_upsampling,
+            seed=seed_val,
+            safety_tolerance=safety_tolerance,
+            output_format=output_format,
+            aspect_ratio=aspect_ratio,
+            image_prompt_strength=image_prompt_strength,
         )
         return (res, VERSION_ID)
