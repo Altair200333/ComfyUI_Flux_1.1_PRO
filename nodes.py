@@ -25,6 +25,11 @@ TOOLTIP_DEFINITIONS = {
     "aspect_ratio": "Aspect ratio of the generated image, e.g., '16:9'.",
     "image_prompt": "Base64 encoded image to remix (if any); leave empty for no image prompt.",
     "image_prompt_strength": "Blend strength between the prompt and image prompt.",
+    "outpaint_prompt": "The description for outpainting, guiding what to add on the image.",
+    "outpaint_top": "Percentage to expand at the top.",
+    "outpaint_bottom": "Percentage to expand at the bottom.",
+    "outpaint_left": "Percentage to expand on the left side.",
+    "outpaint_right": "Percentage to expand on the right side.",
 }
 
 
@@ -237,6 +242,53 @@ class FluxApiClient:
 
         res_img = self.call_api_job(
             endpoint=endpoint,
+            payload=payload,
+            output_format=output_format,
+            max_attempts=max_attempts,
+        )
+        return pil_to_tensor(res_img)
+
+    def expand(
+        self,
+        image,
+        top=0,
+        bottom=0,
+        left=0,
+        right=0,
+        prompt="",
+        steps=50,
+        prompt_upsampling=False,
+        seed=None,
+        guidance=60,
+        output_format="png",
+        safety_tolerance=6,
+        max_attempts=MAX_ATTEMPTS,
+    ):
+        img_b64, img_size = tensor_to_base64(image, mode="RGB")
+        width, height = img_size
+
+        top_pixels = clamp(int(round(top * height / 100)), 0, 2048)
+        bottom_pixels = clamp(int(round(bottom * height / 100)), 0, 2048)
+        left_pixels = clamp(int(round(left * width / 100)), 0, 2048)
+        right_pixels = clamp(int(round(right * width / 100)), 0, 2048)
+
+        payload = {
+            "image": img_b64,
+            "top": top_pixels,
+            "bottom": bottom_pixels,
+            "left": left_pixels,
+            "right": right_pixels,
+            "prompt": prompt,
+            "steps": steps,
+            "prompt_upsampling": prompt_upsampling,
+            "guidance": guidance,
+            "output_format": output_format,
+            "safety_tolerance": safety_tolerance,
+        }
+        if seed is not None:
+            payload["seed"] = seed
+        res_img = self.call_api_job(
+            endpoint="/v1/flux-pro-1.0-expand",
             payload=payload,
             output_format=output_format,
             max_attempts=max_attempts,
@@ -456,5 +508,145 @@ class FluxGenerate:
             output_format=output_format,
             aspect_ratio=aspect_ratio,
             image_prompt_strength=image_prompt_strength,
+        )
+        return (res, VERSION_ID)
+
+
+class FluxProOutpaint:
+    RETURN_TYPES = ("IMAGE", "STRING")
+    FUNCTION = "process"
+    CATEGORY = "BFL"
+
+    def __init__(self):
+        self.config_loader = ConfigLoader()
+        self.api_key = os.environ.get("API_KEY")
+        self.base_url = os.environ.get("BASE_URL", "https://api.us1.bfl.ai")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE", {"tooltip": TOOLTIP_DEFINITIONS["image"]}),
+                "prompt": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "tooltip": TOOLTIP_DEFINITIONS["outpaint_prompt"],
+                    },
+                ),
+                "top": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100,
+                        "tooltip": TOOLTIP_DEFINITIONS["outpaint_top"],
+                    },
+                ),
+                "bottom": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100,
+                        "tooltip": TOOLTIP_DEFINITIONS["outpaint_bottom"],
+                    },
+                ),
+                "left": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100,
+                        "tooltip": TOOLTIP_DEFINITIONS["outpaint_left"],
+                    },
+                ),
+                "right": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100,
+                        "tooltip": TOOLTIP_DEFINITIONS["outpaint_right"],
+                    },
+                ),
+                "steps": (
+                    "INT",
+                    {
+                        "default": 50,
+                        "min": 15,
+                        "max": 50,
+                        "tooltip": TOOLTIP_DEFINITIONS["steps"],
+                    },
+                ),
+                "guidance": (
+                    "FLOAT",
+                    {
+                        "default": 60.0,
+                        "min": 1.5,
+                        "max": 100.0,
+                        "tooltip": TOOLTIP_DEFINITIONS["guidance"],
+                    },
+                ),
+                "safety_tolerance": (
+                    "INT",
+                    {
+                        "default": 6,
+                        "min": 0,
+                        "max": 6,
+                        "tooltip": TOOLTIP_DEFINITIONS["safety_tolerance"],
+                    },
+                ),
+                "output_format": (
+                    ("jpeg", "png"),
+                    {"default": "png", "tooltip": TOOLTIP_DEFINITIONS["output_format"]},
+                ),
+            },
+            "optional": {
+                "seed": (
+                    "INT",
+                    {"default": -1, "tooltip": TOOLTIP_DEFINITIONS["seed"]},
+                ),
+                "prompt_upsampling": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": TOOLTIP_DEFINITIONS["prompt_upsampling"],
+                    },
+                ),
+            },
+        }
+
+    def process(
+        self,
+        image,
+        prompt,
+        top,
+        bottom,
+        left,
+        right,
+        steps,
+        guidance,
+        safety_tolerance,
+        output_format,
+        seed=-1,
+        prompt_upsampling=False,
+    ):
+        client = FluxApiClient(api_key=self.api_key, base_url=self.base_url)
+        seed_val = None if seed == -1 else seed
+        res = client.expand(
+            image=image,
+            top=top,
+            bottom=bottom,
+            left=left,
+            right=right,
+            prompt=prompt,
+            steps=steps,
+            prompt_upsampling=prompt_upsampling,
+            seed=seed_val,
+            guidance=guidance,
+            output_format=output_format,
+            safety_tolerance=safety_tolerance,
         )
         return (res, VERSION_ID)

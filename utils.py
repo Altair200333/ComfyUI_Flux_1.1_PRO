@@ -64,3 +64,7 @@ def get_dimensions_from_ratio(aspect_ratio):
         "9:21": (608, 1408),
     }
     return regular_dimensions.get(aspect_ratio, (1024, 1024))
+
+
+def clamp(value, min_val, max_val):
+    return max(min_val, min(value, max_val))
