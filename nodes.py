@@ -76,15 +76,25 @@ class FluxApiClient:
                 timeout=timeout,
             )
         except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Request error {method} {url}: {e}")
+            error_info = sanitize_response(e)
+            raise RuntimeError(f"Request error {method} {url}: {error_info}")
 
     def submit_job(self, endpoint, payload):
         resp = self.send_request("POST", endpoint, payload)
         if resp.status_code != 200:
-            raise RuntimeError(f"Job submission error {resp.status_code}: {resp.text}")
-        task_id = resp.json().get("id")
+            try:
+                error_data = resp.json()
+            except Exception:
+                error_data = {"error": resp.text}
+            sanitized_error = sanitize_response(error_data)
+            raise RuntimeError(
+                f"Job submission error {resp.status_code}: {sanitized_error}"
+            )
+        response_json = resp.json()
+        task_id = response_json.get("id")
         if not task_id:
-            raise RuntimeError(f"No task id in response: {resp.json()}")
+            sanitized_error = sanitize_response(response_json)
+            raise RuntimeError(f"No task id in response: {sanitized_error}")
         return task_id
 
     def poll_result(self, task_id, output_format="jpeg", max_attempts=15):
