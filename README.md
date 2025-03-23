@@ -1,50 +1,48 @@
-# ComfyUI Flux Pro 1.0 Fill [Inpaint] Extension
+# Flux Pro Inpaint Node
 
-This extension adds inpainting capabilities to ComfyUI using the FLUX.1 Fill [pro] model. The node allows you to provide an input image and mask to perform inpainting on specific areas of the image.
+This plugin adds a new node to ComfyUI. The node uses the FLUX.1 Fill API to fill in parts of an image.
 
 ## Installation
 
-1. Clone this repository into your ComfyUI's `custom_nodes` directory:
-```bash
-cd /path/to/ComfyUI/custom_nodes/
-git clone https://github.com/yourusername/ComfyUI_Flux_1.1_INPAINT.git
-```
+1. Clone this repository to your ComfyUI `custom_nodes` directory:
+   ```bash
+   cd /path/to/ComfyUI/custom_nodes/
+   git clone https://github.com/Altair200333/ComfyUI_Flux_1.1_PRO
+   ```
 
-2. Edit the `config.ini` file in the extension directory to add your API key:
-```ini
-[API]
-API_KEY=your_api_key_here
-BASE_URL=https://api.us1.bfl.ai
-```
+2. Open the `config.ini` file in the extension folder and add your API key:
+   ```ini
+   [API]
+   API_KEY=your_api_key_here
+   BASE_URL=https://api.us1.bfl.ai
+   ```
 
-3. Restart ComfyUI
+3. Restart ComfyUI.
 
 ## Usage
 
-After installation, you'll find a new node called "Flux Pro 1.0 Fill [Inpaint]" in the "BFL" category. This node allows you to:
+After installation, you will see 3 new nodes in the "BFL" category.
 
-1. Provide an input image to be inpainted
-2. Supply a mask (white areas will be inpainted, black areas preserved)
-3. Specify a text prompt to guide the inpainting process
-4. Configure various parameters like steps, guidance strength, etc.
+### Provided Nodes
+- **Flux Generate 1.1 [Pro, Ultra, Raw]**: This node generates images using the Flux API. Can also accept image input
+- **Flux Pro 1.0 Fill [Inpaint]**: This node fills parts of an image based on a text prompt for inpainting and mask.
+- **Flux Pro 1.0 Extend [Outpaint]**: This node extends images from the edges to produce outpainting results.
 
-### Node Inputs
-
-- **image**: The input image to be inpainted
-- **prompt**: Text description of what you want the inpainted areas to contain
-- **steps**: Number of steps for image generation (15-50)
-- **guidance**: Guidance strength for generation (1.5-100)
-- **safety_tolerance**: Moderation level (0-6, lower is stricter)
-- **output_format**: Output image format ("jpeg" or "png")
-- **mask** (optional): The mask specifying areas to inpaint (white=inpaint, black=keep)
-- **seed** (optional): Seed for reproducibility
-- **prompt_upsampling** (optional): Whether to upsample the prompt
 
 ## API Information
 
-This node uses the FLUX.1 Fill [pro] API endpoint:
+For more details, see the API documentation.
+
 ```
-https://api.us1.bfl.ai/v1/flux-pro-1.0-fill
+https://api.us1.bfl.ai/scalar#tag/tasks/POST/v1/flux-pro-1.1
 ```
 
-For more information about the API, please refer to the official documentation.
+Examples:
+
+## Image Examples
+
+Below are image examples demonstrating the inpaint and outpaint functionalities:
+
+|Source | Inpaint | Outpaint
+|-------|-------|-------|
+|![Inpaint Before](imgs/ref_1.png) | ![Inpaint After](imgs/inpaint_1.png) | ![Outpaint After](imgs/outpaint_1.png) |
