@@ -1,0 +1,14 @@
+[project]
+name = "flux_1.1_pro"
+description = "This plugin adds a new node to ComfyUI. The node uses the FLUX.1 Fill API to fill in parts of an image."
+version = "1.0.0"
+license = {file = "LICENSE"}
+
+[project.urls]
+Repository = "https://github.com/Altair200333/ComfyUI_Flux_1.1_PRO"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI_Flux_1.1_PRO"
+Icon = ""
